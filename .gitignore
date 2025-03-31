@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Игнорируем папки с диком файлов и изображениями для предварительного просмотра
+/data/*.dcm
+/images
+/output/*
+/temp-images
+/.ipynb_checkpoints
+/logs
+/*output
+/runs
+
+# Модели
+*.zip
+/*.pt
+
+**/*dataset/
+**/*.png
+
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
