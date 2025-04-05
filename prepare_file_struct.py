@@ -57,14 +57,8 @@ def update_json_files(folder_path):
             for image in data.get('images', []):
                 file_name = image.get('file_name', '')
                 
-                match = re.search(r"([A-Za-z]+)(\d+)", file_name)
-                if not match: ValueError(f"Не удалось найти Букву в пути: {file}")
-                # Получаем номер случая
-                letter, letter_value = match.group(1), match.group(2)
-                
-                if file_name.startswith(letter) and '/' in file_name:
-                    # Удаляем часть до '/'
-                    image['file_name'] = file_name.split('/', 1)[1]
+                # Получаем номер случая и разделяем по '/'
+                image['file_name'] = file_name.split('/')[-1]
             
             # Записываем обновленный JSON обратно в файл
             with open(file_path, 'w', encoding='utf-8') as file:
