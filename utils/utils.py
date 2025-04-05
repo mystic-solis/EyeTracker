@@ -1,3 +1,4 @@
+import cv2
 from pycocotools import mask as mask_util
 from glob import glob
 from PIL import Image as PILImage
@@ -29,6 +30,45 @@ class Annotation(BaseModel):
     attributes: dict = Field(default={"occluded": False})
 
 
+def get_background_color(image):
+    # Берём цвет из верхнего левого угла
+    return tuple(map(int, image[0, 0]))
+
+
+def rotate_image(image, angle, bg_color):
+    if not bg_color:
+        bg_color = get_background_color(image)
+    (h, w) = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    rotated = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=bg_color)
+    return rotated
+
+
+def rotate_mask(points:list[int], image, angle):
+    # Поворачиваем точки сегментации
+    points = np.array(points).reshape(-1, 2)
+    
+    h, w = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    
+    rotated_points = []
+    for x, y in points:
+        new_x = M[0, 0] * x + M[0, 1] * y + M[0, 2]
+        new_y = M[1, 0] * x + M[1, 1] * y + M[1, 2]
+        rotated_points.append((new_x, new_y))
+    return np.array(rotated_points).flatten().tolist()
+
+
+def rotate_point(M, point):
+    """Применяет матрицу поворота к точке"""
+    x, y = point
+    homogeneous_point = np.array([x, y, 1])  # Преобразуем в однородные координаты
+    new_point = np.dot(M, homogeneous_point)  # Умножаем на матрицу поворота
+    return tuple(new_point[:2])  # Возвращаем (x', y')
+
+
 def split_by_proportions(arr, proportions):
     """
     Разделяет массив на части по заданным пропорциям.
@@ -47,12 +87,39 @@ def split_by_proportions(arr, proportions):
     return np.split(arr, split_indices)
 
 
-def process_directory(input_dir, log):
+def get_intermediate_folder(path: str, input_dir: str, default: str = "root"):
+    # input_dir/ВОТ ЭТА ЧАСТЬ НАМ НУЖНА/имя файла.dcm
+    # model/V1/d2/b5//IMG-0001-00125.dcm
+    # model/IMG-0001-00125.dcm
+    # Отделяем известный корень
+    relative_part = os.path.relpath(path, start=input_dir)
+    # some/folder/file.dcm
+    # file.dcm
+    split_symbol = '/' if "/" in relative_part else '\\'
+    parts = relative_part.split(split_symbol)
+    if len(parts) > 1:  # Если есть хотя бы одна папка
+        return parts[0]
+    return default
+
+def count_all_numbers(paths, input_dir, default_folder):
+    letter_counts = {}
+    
+    # Перебираем пути и считаем
+    for path in paths:
+        folder = get_intermediate_folder(path, input_dir, default_folder)
+        
+        if folder not in letter_counts:
+            letter_counts[folder] = 0
+        letter_counts[folder] += 1
+    return letter_counts
+
+
+def process_directory(input_dir, find_sufix:str="png"):
     """
-    Обрабатывает директорию, проверяет её существование и возвращает список файлов .dcm.
+    Обрабатывает директорию, проверяет её существование и возвращает список файлов.
     
     :param input_dir: Путь к директории.
-    :return: Список файлов .dcm.
+    :return: Список файлов.
     """
     # Нормализация пути (убираем лишние символы, приводим к абсолютному пути)
     input_dir = os.path.normpath(input_dir)
@@ -66,22 +133,25 @@ def process_directory(input_dir, log):
         raise ValueError(f"'{input_dir}' не является директорией!")
     
     # Ищем все файлы .dcm в директории
-    dicom_files = glob(os.path.join(input_dir, "**", "*.dcm"), recursive=True)
+    files = glob(os.path.join(input_dir, "**", f"*.{find_sufix}"), recursive=True)
     
     # Если файлов нет, выводим предупреждение
-    if not dicom_files:
-        log.error(f"В директории '{input_dir}' не найдено файлов .dcm.")
-    
-    return dicom_files
+    if not files:
+        print(f"В директории '{input_dir}' не найдено файлов расширения {find_sufix}.")
+    print(f"Файлов {find_sufix} найдено: {len(files)}")
+    return files
 
 
-def convert_to_png(data, name:str=None, output_dir:str=None, save=True, verbose=False):
+def save_to_png(data, name:str=None, output_dir:str=None, save=True, angle:int=None, verbose=False):
     """
     Сохраняет массив NumPy в формате PNG.
     
     :param array: Массив NumPy (2D или 3D).
     :param name: Имя файла для сохранения.
     """
+    if data is None:
+        return None
+    
     # Нормализация массива в диапазон 0–255
     if data.dtype != np.uint8:
         array_normalized = ((data - np.min(data)) / (np.max(data) - np.min(data)) * 255).astype(np.uint8)
@@ -95,11 +165,15 @@ def convert_to_png(data, name:str=None, output_dir:str=None, save=True, verbose=
         image = PILImage.fromarray(array_normalized, mode='RGB')
     else:
         raise ValueError("Массив должен быть 2D (grayscale) или 3D (RGB).")
-
+    
+    # Если указан угол то поворачиваем
+    if angle:
+        image = rotate_image(image=image, angle=angle)
+    
     # Сохранение изображения
     if save and output_dir and name:
         os.makedirs(output_dir, exist_ok=True)
-        image.save(f"{output_dir}/{name}")
+        image.save(os.path.join(output_dir, name))
     if verbose:
         print(f"Изображение сохранено как {name}")
     return image
